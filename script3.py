@@ -12,17 +12,16 @@ PASSWORD = "xriczx555"
 
 # --- Path di Server A ---
 TESTING_DIR = "/root/testing" 
-# Menggunakan direktori /var/tmp sebagai penampungan sementara
-REMOTE_TEMP_DIR = "/root/var/tmp" 
+TEMP_DIR_SERVER = f"/tmp/archive_temp_{int(datetime.now().timestamp())}"
 
 # --- Path di LOKAL Server B ---
-LOCAL_BACKUP_BASE_DIR = "/home/xriczx/backups"
+# Ganti dengan path yang Anda inginkan di Server B
+LOCAL_BACKUP_BASE_DIR = "/home/subscribe/backups" # <<< INI SATU-SATUNYA PERUBAHAN
 
 # --- Inisialisasi Klien ---
 ssh_client = paramiko.SSHClient()
 ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 sftp_client = None
-files_to_archive = [] # Definisikan di luar try untuk bisa diakses di finally
 
 # --- Fungsi helper untuk menjalankan command di server A ---
 def execute_command(command):
@@ -54,6 +53,7 @@ try:
     today = datetime.now().date()
     yesterday = today - timedelta(days=1)
     
+    files_to_archive = []
     file_dates = []
     month_map = {name: num for num, name in enumerate(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], 1)}
 
@@ -73,22 +73,16 @@ try:
     else:
         print(f"\n ditemukan {len(files_to_archive)} file untuk diarsipkan: {files_to_archive}")
 
-        # LANGKAH 1: Salin file dari /root/testing ke /var/tmp di Server A
+        # LANGKAH 1: Buat folder sementara di Server A
+        execute_command(f"mkdir -p {TEMP_DIR_SERVER}")
+
+        # LANGKAH 2: Salin file dari /root/testing ke folder sementara di Server A
         for filename in files_to_archive:
             source_path = f"{TESTING_DIR}/{filename}"
-            # Tujuan langsung ke /var/tmp
-            destination_path = f"{REMOTE_TEMP_DIR}/"
-            execute_command(f"sudo cp {source_path} {destination_path}")
-        print(f"✅ File berhasil disalin ke {REMOTE_TEMP_DIR} di Server A.")
+            execute_command(f"sudo cp {source_path} {TEMP_DIR_SERVER}/")
+        print("✅ File berhasil disalin ke folder sementara di Server A.")
 
-        # LANGKAH 2 (BARU): Ubah izin file di folder sementara
-        print("🔐 Mengubah izin file di folder sementara...")
-        for filename in files_to_archive:
-            remote_temp_path = f"{REMOTE_TEMP_DIR}/{filename}"
-            execute_command(f"sudo chmod 777 {remote_temp_path}")
-        print("✅ Izin file berhasil diubah.")
-
-        # LANGKAH 3: Buat folder backup di LOKAL Server B
+        # 3. Buat folder backup di LOKAL Server B
         min_date = min(file_dates)
         max_date = max(file_dates)
         folder_name = f"{min_date.day}-{max_date.day}-{today.strftime('%B').lower()}"
@@ -96,19 +90,19 @@ try:
         os.makedirs(local_new_backup_dir, exist_ok=True)
         print(f"✅ Folder lokal di Server B dibuat: {local_new_backup_dir}")
 
-        # LANGKAH 4: UNDUH file dari Server A ke LOKAL Server B
+        # 4. UNDUH file dari Server A ke LOKAL Server B
         for filename in files_to_archive:
-            remote_temp_path = f"{REMOTE_TEMP_DIR}/{filename}"
+            remote_temp_path = f"{TEMP_DIR_SERVER}/{filename}"
             local_destination_path = os.path.join(local_new_backup_dir, filename)
             
             print(f"📥 Mengunduh {filename} ke Server B...")
             sftp_client.get(remote_temp_path, local_destination_path)
         print("✅ Semua file berhasil diunduh ke Server B.")
         
-        # LANGKAH 5: HAPUS file dari folder ASLI di Server A
-        for filename in files_to_archive:
-            remote_original_path = f"{TESTING_DIR}/{filename}"
-            execute_command(f"sudo rm {remote_original_path}")
+        # 5. HAPUS file dari folder ASLI di Server A
+        # for filename in files_to_archive:
+        #     remote_original_path = f"{TESTING_DIR}/{filename}"
+        #     execute_command(f"sudo rm {remote_original_path}")
         print("✅ Semua file asli berhasil dihapus dari Server A.")
 
         print(f"\n🎉 Proses arsip berhasil! File diunduh ke: {local_new_backup_dir}")
@@ -117,18 +111,12 @@ except Exception as e:
     print(f"\n❌ TERJADI KESALAHAN KRITIS: {e}")
 
 finally:
-    # LANGKAH 6: Selalu hapus file sementara di Server A
-    # Cek jika koneksi masih aktif dan ada file yang sudah diproses
-    if ssh_client.get_transport() and ssh_client.get_transport().is_active() and files_to_archive:
-        print(f"🧹 Membersihkan file sementara di Server A dari: {REMOTE_TEMP_DIR}")
-        for filename in files_to_archive:
-            remote_temp_path = f"{REMOTE_TEMP_DIR}/{filename}"
-            try:
-                execute_command(f"sudo rm {remote_temp_path}")
-            except Exception as clean_e:
-                print(f"⚠️ Gagal membersihkan file {remote_temp_path}: {clean_e}")
-    
-    # LANGKAH 7: Tutup semua koneksi
+    # LANGKAH 6: Selalu hapus folder sementara di Server A
+    if 'TEMP_DIR_SERVER' in locals() and ssh_client.get_transport() and ssh_client.get_transport().is_active():
+        print(f"🧹 Membersihkan folder sementara di Server A: {TEMP_DIR_SERVER}")
+        execute_command(f"rm -rf {TEMP_DIR_SERVER}")
+
+    # 7. Tutup semua koneksi
     if sftp_client:
         sftp_client.close()
     if ssh_client.get_transport() and ssh_client.get_transport().is_active():
